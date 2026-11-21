@@ -1,0 +1,40 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/package-solution.schema.json",
+  "solution": {
+    "name": "qp-lifecycle-client-side-solution",
+    "id": "1bdd1603-35ac-453b-8c31-8be629022211",
+    "version": "1.0.0.0",
+    "includeClientSideAssets": true,
+    "skipFeatureDeployment": true,
+    "isDomainIsolated": false,
+    "developer": {
+      "name": "",
+      "websiteUrl": "",
+      "privacyUrl": "",
+      "termsOfUseUrl": "",
+      "mpnId": "Undefined-1.23.2"
+    },
+    "metadata": {
+      "shortDescription": {
+        "default": "qp-lifecycle description"
+      },
+      "longDescription": {
+        "default": "qp-lifecycle description"
+      },
+      "screenshotPaths": [],
+      "videoUrl": "",
+      "categories": []
+    },
+    "features": [
+      {
+        "title": "qp-lifecycle Feature",
+        "description": "The feature that activates elements of the qp-lifecycle solution.",
+        "id": "642dc69a-8688-47a8-935c-0e4c9761f13d",
+        "version": "1.0.0.0"
+      }
+    ]
+  },
+  "paths": {
+    "zippedPackage": "solution/qp-lifecycle.sppkg"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/config.2.0.schema.json",
+  "version": "2.0",
+  "bundles": {
+    "qplifecycle-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/qplifecycle/QplifecycleWebPart.js",
+          "manifest": "./src/webparts/qplifecycle/QplifecycleWebPart.manifest.json"
+        }
+      ]
+    }
+  },
+  "externals": {},
+  "localizedResources": {
+    "QplifecycleWebPartStrings": "lib/webparts/qplifecycle/loc/{locale}.js"
+  }
+}
