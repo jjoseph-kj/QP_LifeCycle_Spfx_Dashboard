@@ -4,21 +4,26 @@ import type { IQpcycleProps } from './IQplifecycleProps';
 import { SPHttpClient, SPHttpClientResponse } from '@microsoft/sp-http';
 
 interface IQpItem {
-  id: number;
+ id: number;
   qpId: string;
   status: string;
+  lifecycleStage: string;
   changeDate: Date | undefined;
   days: number | undefined;
+  reviewStatus: string;
+  reviewStatusDays: string;
 }
 
-type SortKey = 'qpId' | 'status' | 'changeDate' | 'days';
+type SortKey = 'qpId' | 'status' | 'lifecycleStage' | 'days' | 'reviewStatus' | 'reviewStatusDays';
 
 interface IState {
-  items: IQpItem[];
+ items: IQpItem[];
   loading: boolean;
   error: string;
   search: string;
   statusFilter: string;
+  stageFilter: string;
+  displayFormUrl: string;
   sortKey: SortKey;
   sortAsc: boolean;
   lastRefreshed: Date | undefined;
@@ -30,8 +35,18 @@ const STATUS_CLASS: { [k: string]: string } = {
   'Proposed QP': 'proposed',
   'Agreed QP': 'agreed'
 };
+const LIFECYCLE_STAGES: string[] = [
+  'DQP awaiting client input',
+  'DQP awaiting Ops Manager approval',
+  'PQP awaiting A&I input',
+  'PQP awaiting Ops Manager approval',
+  'AQP awaiting client signature',
+  'AQP is signed and awaiting Certificate issue',
+  'AQP is agreed and signed',
+  'AQP is under review'
+];
 const MS_PER_DAY: number = 1000 * 60 * 60 * 24;
-
+const cls = (name: string): string => (styles as unknown as { [k: string]: string })[name] || '';
 const fmtDate = (d: Date | undefined): string =>
   d ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 
@@ -51,11 +66,13 @@ export default class Qpcycle extends React.Component<IQpcycleProps, IState> {
   constructor(props: IQpcycleProps) {
     super(props);
     this.state = {
-      items: [],
+         items: [],
       loading: true,
       error: '',
       search: '',
       statusFilter: 'All',
+      stageFilter: 'All',
+      displayFormUrl: '',
       sortKey: 'days',
       sortAsc: false,
       lastRefreshed: undefined
@@ -68,13 +85,31 @@ export default class Qpcycle extends React.Component<IQpcycleProps, IState> {
 
   private _load = async (): Promise<void> => {
     this.setState({ loading: true, error: '' });
-    try {
-      const { siteUrl, listName, spHttpClient } = this.props;
-      const select: string = 'Id,QP_x0020_ID,Lifecycle_x0020_Change_x0020_Dat,field_2';
+    try{
+    const { siteUrl, listName, spHttpClient } = this.props;
+      const select: string =
+        'Id,QP_x0020_ID,Lifecycle_x0020_Change_x0020_Dat,field_2,Lifecycle_x0020_Progress,ReviewStatus,Review_x0020_Status_x0020_with_x';
       let url: string =
         `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listName)}')/items` +
         `?$select=${select}&$top=5000`;
       const all: IQpItem[] = [];
+
+      // Resolve the list's display form (DispForm.aspx) URL
+      let displayFormUrl: string = '';
+      try {
+        const lr: SPHttpClientResponse = await spHttpClient.get(
+          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listName)}')?$select=DefaultDisplayFormUrl`,
+          SPHttpClient.configurations.v1
+        );
+        if (lr.ok) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const lj: any = await lr.json();
+          displayFormUrl = lj.DefaultDisplayFormUrl || (lj.d && lj.d.DefaultDisplayFormUrl) || '';
+        }
+      } catch (e) { /* fall back below */ }
+      if (!displayFormUrl) {
+        displayFormUrl = `${new URL(siteUrl).pathname.replace(/\/$/, '')}/Lists/${encodeURIComponent(listName.replace(/ /g, ''))}/DispForm.aspx`;
+      }
       const today: number = startOfDay(new Date());
 
       while (url) {
@@ -92,24 +127,29 @@ export default class Qpcycle extends React.Component<IQpcycleProps, IState> {
             id: r.Id,
             qpId: r.QP_x0020_ID ? String(r.QP_x0020_ID) : '',
             status: r.field_2 ? String(r.field_2) : '',
+            lifecycleStage: r.Lifecycle_x0020_Progress ? String(r.Lifecycle_x0020_Progress) : '',
             changeDate: d,
-            days: d ? Math.round((today - startOfDay(d)) / MS_PER_DAY) : undefined
+            days: d ? Math.round((today - startOfDay(d)) / MS_PER_DAY) : undefined,
+            reviewStatus: r.ReviewStatus ? String(r.ReviewStatus) : '',
+            reviewStatusDays: r.Review_x0020_Status_x0020_with_x !== null && r.Review_x0020_Status_x0020_with_x !== undefined
+              ? String(r.Review_x0020_Status_x0020_with_x) : ''
           });
         });
         url = json['odata.nextLink'] || json['@odata.nextLink'] || '';
       }
 
-      this.setState({ items: all, loading: false, lastRefreshed: new Date() });
+      this.setState({ items: all, displayFormUrl, loading: false, lastRefreshed: new Date() });
     } catch (e) {
       this.setState({ loading: false, error: (e as Error).message });
     }
   };
 
   private _visibleItems(): IQpItem[] {
-    const { items, search, statusFilter, sortKey, sortAsc } = this.state;
+    const { items, search, statusFilter, stageFilter, sortKey, sortAsc } = this.state;
     const q: string = search.trim().toLowerCase();
     const list: IQpItem[] = items.filter(i =>
       (statusFilter === 'All' || i.status === statusFilter) &&
+      (stageFilter === 'All' || i.lifecycleStage === stageFilter) &&
       (!q || i.qpId.toLowerCase().indexOf(q) > -1)
     );
     const dir: number = sortAsc ? 1 : -1;
@@ -119,7 +159,14 @@ export default class Qpcycle extends React.Component<IQpcycleProps, IState> {
       switch (sortKey) {
         case 'qpId': av = a.qpId.toLowerCase(); bv = b.qpId.toLowerCase(); break;
         case 'status': av = a.status; bv = b.status; break;
-        case 'changeDate': av = a.changeDate ? a.changeDate.getTime() : -1; bv = b.changeDate ? b.changeDate.getTime() : -1; break;
+        case 'lifecycleStage': av = a.lifecycleStage; bv = b.lifecycleStage; break;
+        case 'reviewStatus': av = a.reviewStatus; bv = b.reviewStatus; break;
+        case 'reviewStatusDays': {
+          const an: number = parseFloat(a.reviewStatusDays);
+          const bn: number = parseFloat(b.reviewStatusDays);
+          if (!isNaN(an) && !isNaN(bn)) { av = an; bv = bn; } else { av = a.reviewStatusDays; bv = b.reviewStatusDays; }
+          break;
+        }
         default: av = a.days === undefined ? -1 : a.days; bv = b.days === undefined ? -1 : b.days;
       }
       return av < bv ? -1 * dir : av > bv ? 1 * dir : 0;
@@ -135,13 +182,15 @@ export default class Qpcycle extends React.Component<IQpcycleProps, IState> {
     const rows: IQpItem[] = this._visibleItems();
     const esc = (v: string): string =>
       v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const head: string = ['QP ID', 'Status', 'Lifecycle Change Date', 'No. of Days']
+    const head: string = ['QP ID', 'Status', 'Lifecycle Stage', 'No. of Days', 'Review Status', 'Review Status with Days']
       .map(h => `<th style="background:#0f4c81;color:#fff;font-weight:bold;border:1px solid #999">${h}</th>`).join('');
     const body: string = rows.map(r =>
       `<tr><td style="border:1px solid #ccc">${esc(r.qpId)}</td>` +
       `<td style="border:1px solid #ccc">${esc(r.status)}</td>` +
-      `<td style="border:1px solid #ccc">${esc(fmtDate(r.changeDate))}</td>` +
-      `<td style="border:1px solid #ccc">${r.days === undefined ? '' : r.days}</td></tr>`
+      `<td style="border:1px solid #ccc">${esc(r.lifecycleStage)}</td>` +
+      `<td style="border:1px solid #ccc">${r.days === undefined ? '' : r.days}</td>` +
+      `<td style="border:1px solid #ccc">${esc(r.reviewStatus)}</td>` +
+      `<td style="border:1px solid #ccc">${esc(r.reviewStatusDays)}</td></tr>`
     ).join('');
     const html: string =
       '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">' +
@@ -159,8 +208,8 @@ export default class Qpcycle extends React.Component<IQpcycleProps, IState> {
   };
 
   private _badge(status: string): React.ReactElement {
-    const key: string = STATUS_CLASS[status] || 'other';
-    return <span className={`${styles.badge} ${styles[key]}`}>{status || 'Unassigned'}</span>;
+   const key: string = STATUS_CLASS[status] || 'other';
+    return <span className={`${styles.badge} ${cls(key)}`}>{status || 'Unassigned'}</span>;
   }
 
   private _daysPill(days: number | undefined): React.ReactElement {
@@ -179,7 +228,7 @@ export default class Qpcycle extends React.Component<IQpcycleProps, IState> {
   }
 
   public render(): React.ReactElement<IQpcycleProps> {
-    const { items, loading, error, search, statusFilter, lastRefreshed } = this.state;
+    const { items, loading, error, search, statusFilter, stageFilter, displayFormUrl, lastRefreshed } = this.state;
     const rows: IQpItem[] = this._visibleItems();
     const count = (s: string): number => items.filter(i => i.status === s).length;
 
@@ -208,7 +257,7 @@ export default class Qpcycle extends React.Component<IQpcycleProps, IState> {
             <div className={styles.cardNum}>{items.length}</div><div className={styles.cardLbl}>Total QPs</div>
           </div>
           {STATUSES.map(s => (
-            <div key={s} className={`${styles.card} ${styles['c_' + STATUS_CLASS[s]]}`} onClick={() => this.setState({ statusFilter: s })}>
+           <div key={s} className={`${styles.card} ${cls('c_' + STATUS_CLASS[s])}`} onClick={() => this.setState({ statusFilter: s })}>
               <div className={styles.cardNum}>{count(s)}</div><div className={styles.cardLbl}>{s}</div>
             </div>
           ))}
@@ -225,6 +274,10 @@ export default class Qpcycle extends React.Component<IQpcycleProps, IState> {
             <option value="All">All statuses</option>
             {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
+          <select className={styles.select} value={stageFilter} onChange={e => this.setState({ stageFilter: e.target.value })}>
+            <option value="All">All lifecycle stages</option>
+            {LIFECYCLE_STAGES.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
           <span className={styles.count}>{rows.length} of {items.length} records</span>
         </div>
 
@@ -236,19 +289,31 @@ export default class Qpcycle extends React.Component<IQpcycleProps, IState> {
               <tr>
                 {this._th('QP ID', 'qpId')}
                 {this._th('Status', 'status')}
-                {this._th('Lifecycle Change Date', 'changeDate')}
+                {this._th('Lifecycle Stage', 'lifecycleStage')}
                 {this._th('No. of Days', 'days')}
+                {this._th('Review Status', 'reviewStatus')}
+                {this._th('Review Status with Days', 'reviewStatusDays')}
               </tr>
             </thead>
             <tbody>
-              {loading && <tr><td colSpan={4} className={styles.empty}>Loading…</td></tr>}
-              {!loading && rows.length === 0 && <tr><td colSpan={4} className={styles.empty}>No records found</td></tr>}
+              {loading && <tr><td colSpan={6} className={styles.empty}>Loading…</td></tr>}
+              {!loading && rows.length === 0 && <tr><td colSpan={6} className={styles.empty}>No records found</td></tr>}
               {!loading && rows.map(r => (
                 <tr key={r.id}>
-                  <td className={styles.qpId}>{r.qpId}</td>
+                  <td className={styles.qpId}>
+                    <a
+                      href={`${displayFormUrl}?ID=${r.id}`}
+                      onClick={e => {
+                        e.preventDefault();
+                        window.open(`${displayFormUrl}?ID=${r.id}`, '_blank', 'noopener,noreferrer');
+                      }}
+                    >{r.qpId || `(ID ${r.id})`}</a>
+                  </td>
                   <td>{this._badge(r.status)}</td>
-                  <td>{fmtDate(r.changeDate)}</td>
+                  <td>{r.lifecycleStage || '—'}</td>
                   <td>{this._daysPill(r.days)}</td>
+                  <td>{r.reviewStatus || '—'}</td>
+                  <td>{r.reviewStatusDays || '—'}</td>
                 </tr>
               ))}
             </tbody>
